@@ -1,0 +1,115 @@
+services:
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - test_net
+
+  task_receiver:
+    build: ./task_receiver
+    depends_on:
+      - redis
+    stdin_open: true
+    tty: true
+    networks:
+      - test_net
+
+  worker:
+    build: ./worker
+    depends_on:
+      - redis
+    networks:
+      - test_net
+    stdin_open: true
+    tty: true
+
+  printer:
+    build: ./printer
+    depends_on:
+      - redis
+    networks:
+      - test_net
+    stdin_open: true
+    tty: true
+
+  jaeger:
+    image: jaegertracing/jaeger:2.4.0
+    container_name: jaeger
+    expose:
+      - "16686"
+      - "4317"
+      - "4318"
+      - "8888"
+      - "8889"
+    volumes:
+      - ./jaeger_config.yaml:/etc/jaeger/jaeger_config.yaml
+      - ./jaeger_config_ui.json:/etc/jaeger/config-ui.json
+    command: [ "--config", "/etc/jaeger/jaeger_config.yaml" ]
+    environment:
+      - METRICS_STORAGE_TYPE=prometheus
+    networks:
+      - test_net
+    depends_on:
+      - elasticsearch
+    restart: always
+
+  jaeger_ui_auth:
+    container_name: jaeger_ui_auth
+    build: ./jaeger_ui_auth
+    ports:
+      - "8080:8080"
+    env_file:
+      - config_jaeger_ui_auth.env
+    depends_on:
+      - jaeger
+    networks:
+      - test_net
+    restart: always
+
+  elasticsearch:
+    mem_limit: 2g
+    image: elasticsearch:8.17.3
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - http.host=0.0.0.0
+      - transport.host=0.0.0.0
+      - xpack.security.enabled=false  # Disable security features
+      - xpack.security.http.ssl.enabled=false  # Disable HTTPS
+      - action.destructive_requires_name=false
+      - xpack.monitoring.collection.enabled=false  # Disable monitoring features
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    expose:
+      - "9200"
+    networks:
+      - test_net
+    restart: always
+
+  spark-dependencies:
+    image: ghcr.io/jaegertracing/spark-dependencies/spark-dependencies:latest
+    container_name: spark-dependencies
+    depends_on:
+      - elasticsearch
+    networks:
+      - test_net
+    environment:
+      - STORAGE=elasticsearch
+      - ES_NODES=http://elasticsearch:9200
+      - ES_NODES_WAN_ONLY=true
+      - ES_INDEX_PREFIX=jaeger-main
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    expose:
+      - "9090"
+    networks:
+      - test_net
+    restart: always
+
+networks:
+  test_net:
